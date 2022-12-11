@@ -14,6 +14,7 @@ var (
 
 type App struct {
 	Version string
+	Source  io.Reader
 	impl    appImpl
 }
 
@@ -23,8 +24,11 @@ func (app *App) Generate() error {
 }
 
 func (app *App) Execute(args []string) error {
+	if app.Source == nil {
+		app.Source = File("app.yaml")
+	}
 
-	if err := app.Build(File("app.yaml")); err != nil {
+	if err := app.Build(app.Source); err != nil {
 		return err
 	}
 

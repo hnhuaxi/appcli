@@ -6,9 +6,18 @@ import (
     {{ .Imports }}
 )
 
-var Injects = Map {
+var Injects = map[string]interface{} {
 {{ .Injects }} 
 }
+
+var InjectFuncs = map[string]interface{} {
+{{ .InjectFuncs }} 
+}
+
+var InjectTypes = map[string]interface{} {
+{{ .InjectTypes }} 
+}
+
 
 func init() {
     {{ .InitCode }}

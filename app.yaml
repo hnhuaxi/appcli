@@ -22,7 +22,7 @@ commands:
         type: "Bool"
         value: true
     action: print(flag)
-action: new(App, {"version", $version})
+action: print("hello")
 license:
   header: This file bleongs to clig
   copyright: Copyright © 2019 clig

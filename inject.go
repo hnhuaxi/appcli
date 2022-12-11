@@ -1,9 +1,11 @@
 package appcli
 
 import (
+	"bytes"
 	"fmt"
 	"go/types"
 	"io"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +26,7 @@ var (
 
 type Inject struct {
 	Package string
+	Alias   string
 	Methods []Match
 	Objects []Match
 	Action  Action
@@ -35,6 +38,10 @@ type Match struct {
 	Contains []string
 	Excludes []string
 }
+
+var (
+	globalAliaies = make(map[string]string)
+)
 
 func LoadPackages(pkgNames ...string) ([]*packages.Package, error) {
 	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedDeps | packages.NeedExportFile | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedTypesSizes}
@@ -49,14 +56,22 @@ func LoadPackages(pkgNames ...string) ([]*packages.Package, error) {
 	return pkgs, nil
 }
 
-func Injects(funcs Map) {
-	_InjectObjects = funcs
-}
-
 func (app *appImpl) GenerateInjects() error {
-	var packages []string
+	var (
+		packages []string
+	)
+
+	globalAliaies = make(map[string]string)
+
 	for _, inject := range app.Injects {
 		packages = append(packages, inject.Package)
+		if inject.Alias != "" {
+			globalAliaies[inject.Package] = inject.Alias
+		}
+	}
+
+	getAlias := func(pkg *types.Package) string {
+		return globalAliaies[pkg.Path()]
 	}
 
 	pkgs, err := LoadPackages(packages...)
@@ -92,7 +107,7 @@ func (app *appImpl) GenerateInjects() error {
 					funcs = append(funcs, &typeInfo{
 						pkg:   object.Pkg(),
 						name:  name,
-						alias: "",
+						alias: getAlias(object.Pkg()),
 						typ:   T,
 					})
 				case *types.Struct:
@@ -102,7 +117,7 @@ func (app *appImpl) GenerateInjects() error {
 					nameTypes = append(nameTypes, &typeInfo{
 						pkg:   object.Pkg(),
 						name:  name,
-						alias: "",
+						alias: getAlias(object.Pkg()),
 						typ:   T,
 					})
 				case *types.Named:
@@ -119,7 +134,7 @@ func (app *appImpl) GenerateInjects() error {
 						structs = append(structs, &typeInfo{
 							pkg:   object.Pkg(),
 							name:  name,
-							alias: "",
+							alias: getAlias(object.Pkg()),
 							typ:   T,
 						})
 					case *types.Signature:
@@ -133,7 +148,7 @@ func (app *appImpl) GenerateInjects() error {
 						others = append(others, &typeInfo{
 							pkg:   object.Pkg(),
 							name:  name,
-							alias: "",
+							alias: getAlias(object.Pkg()),
 							typ:   T,
 						})
 					}
@@ -144,7 +159,7 @@ func (app *appImpl) GenerateInjects() error {
 					nameTypes = append(nameTypes, &typeInfo{
 						pkg:   object.Pkg(),
 						name:  name,
-						alias: "",
+						alias: getAlias(object.Pkg()),
 						typ:   T,
 					})
 				default:
@@ -154,7 +169,7 @@ func (app *appImpl) GenerateInjects() error {
 					others = append(others, &typeInfo{
 						pkg:   object.Pkg(),
 						name:  name,
-						alias: "",
+						alias: getAlias(object.Pkg()),
 						typ:   T,
 					})
 				}
@@ -163,19 +178,26 @@ func (app *appImpl) GenerateInjects() error {
 					pkgPaths[object.Pkg().Path()] = append(pkgPaths[object.Pkg().Path()], &typeInfo{
 						pkg:   object.Pkg(),
 						name:  name,
-						alias: "",
+						alias: getAlias(object.Pkg()),
 						typ:   T,
 					})
 				}
 			}
 		}
-
 	}
 
-	genfile := File(app.Geninject)
+	var (
+		genfile = File(app.Geninject)
+		buf     bytes.Buffer
+	)
 
 	defer genfile.Close()
-	return app.generateInjectgo(genfile, nameTypes, funcs, structs, others, pkgPaths)
+
+	if err := app.generateInjectgo(&buf, nameTypes, funcs, structs, others, pkgPaths); err != nil {
+		return err
+	}
+
+	return app.importsFormat(genfile, &buf)
 }
 
 func typeName(typ *types.TypeName) *types.Package {
@@ -214,44 +236,86 @@ func (app *appImpl) generateInjectgo(w io.Writer, names, funcs, structs, others 
 	return tmpl.Execute(w, &ctx)
 }
 
-func printMap(prefix string, m typeutil.Map) {
-	var lines []string
-	m.Iterate(func(T types.Type, names interface{}) {
-		lines = append(lines, fmt.Sprintf("%s   %s", names, T))
-	})
-	sort.Strings(lines)
-	for _, line := range lines {
-		fmt.Printf(prefix, line)
-	}
+func (app *appImpl) importsFormat(w io.Writer, source io.Reader) error {
+	// 调用 goimports 格式化代码
+	cmd := exec.Command("goimports")
+	cmd.Stdin = source
+	cmd.Stdout = w
+	return cmd.Run()
+
 }
 
 func (ctx *InjectContext) Imports() string {
 	var (
-		aliaies = make(map[string][]string)
+		aliaies = make(map[string]string)
 	)
 
 	for pkgName, typs := range ctx.pkgPaths {
 		for _, typ := range typs {
 			if typ.alias != "" {
-				aliaies[pkgName] = append(aliaies[pkgName], typ.alias)
+				aliaies[pkgName] = typ.alias
 			}
 		}
 	}
 
-	var lines []string
+	var lines = []string{
+		// Quote("github.com/hnhuaxi/appcli"),
+		Quote("github.com/hnhuaxi/appcli/env"),
+	}
+
 	for pkgName := range ctx.pkgPaths {
-		lines = append(lines, Quote(pkgName))
-		for _, alias := range aliaies[pkgName] {
-			lines = append(lines, fmt.Sprintf("%s %s", alias, Quote(pkgName)))
+		if alias, ok := aliaies[pkgName]; ok {
+			lines = append(lines, fmt.Sprintf("\t%s %s", alias, Quote(pkgName)))
+		} else {
+			lines = append(lines, Quote(pkgName))
 		}
 	}
 
+	lines = dedup(lines)
 	sort.Strings(lines)
 
 	return strings.Join(lines, "\n")
 }
 
 func (ctx *InjectContext) Injects() string {
+	var (
+		idents = make(map[string]bool)
+		lines  []string
+	)
+
+	for _, typ := range ctx.names {
+		if _, ok := idents[typ.name]; !ok {
+			idents[typ.name] = true
+			lines = append(lines, fmt.Sprintf("\t%s: %s,", Quote(globalName(typ.name)), pkgName(typ.pkg, typ.name)))
+		}
+	}
+
+	sort.Strings(lines)
+	lines = dedup(lines)
+
+	return strings.Join(lines, "\n")
+}
+
+func (ctx *InjectContext) InjectTypes() string {
+	var (
+		idents = make(map[string]bool)
+		lines  []string
+	)
+
+	for _, typ := range ctx.structs {
+		if _, ok := idents[typ.name]; !ok {
+			idents[typ.name] = true
+			lines = append(lines, fmt.Sprintf("\t%s: %s,", Quote(typ.name), varStruct(typ.pkg, typ.name)))
+		}
+	}
+
+	sort.Strings(lines)
+	lines = dedup(lines)
+
+	return strings.Join(lines, "\n")
+}
+
+func (ctx *InjectContext) InjectFuncs() string {
 	var (
 		idents = make(map[string]bool)
 		lines  []string
@@ -264,43 +328,39 @@ func (ctx *InjectContext) Injects() string {
 		}
 	}
 
-	for _, typ := range ctx.structs {
-		if _, ok := idents[typ.name]; !ok {
-			idents[typ.name] = true
-			lines = append(lines, fmt.Sprintf("\t%s: %s,", Quote(typ.name), Quote(className(typ.name))))
-		}
-	}
-
-	//
-	for _, typ := range ctx.names {
-		if _, ok := idents[typ.name]; !ok {
-			idents[typ.name] = true
-			lines = append(lines, fmt.Sprintf("\t%s: %s,", Quote(globalName(typ.name)), pkgName(typ.pkg, typ.name)))
-		}
-	}
-
 	sort.Strings(lines)
+	lines = dedup(lines)
 
 	return strings.Join(lines, "\n")
 }
 
 func (ctx *InjectContext) InitCode() string {
 	var classLines []string
-	for _, typ := range ctx.structs {
-		className := Quote(className(typ.name))
-		classLines = append(classLines, fmt.Sprintf("\tappcli.RegisterCreate(%s, %s{})", className, pkgName(typ.pkg, typ.name)))
-	}
 
-	return "appcli.Injects(Injects)\n" +
+	return "env.Injects(Injects)\n" +
+		"env.InjectTypes(InjectTypes)\n" +
+		"env.InjectFuncs(InjectFuncs)\n" +
 		strings.Join(classLines, "\n")
 }
 
 func pkgName(pkg *types.Package, name string) string {
-	return pkg.Name() + "." + name
+	var (
+		pkgName = pkg.Name()
+		alias   = globalAliaies[pkg.Path()]
+	)
+
+	if alias != "" {
+		pkgName = alias
+	}
+	return pkgName + "." + name
+}
+
+func varStruct(pkg *types.Package, name string) string {
+	return pkgName(pkg, name) + "{}"
 }
 
 var (
-	globalVarnames = make(map[string]int)
+	globalVars = make(map[string]int)
 )
 
 func unique(varname string) string {
@@ -309,16 +369,16 @@ func unique(varname string) string {
 	)
 
 	defer func() {
-		globalVarnames[varname] = tick
+		globalVars[varname] = tick
 	}()
 
-	tick, ok := globalVarnames[varname]
+	tick, ok := globalVars[varname]
 	if !ok {
 		return varname
 	}
 
 	exists := func(s string) bool {
-		_, ok := globalVarnames[varname]
+		_, ok := globalVars[varname]
 		return ok
 	}
 
@@ -338,5 +398,19 @@ func varName(name string) string {
 }
 
 func globalName(name string) string {
-	return unique("$" + camelCase(name))
+	// return unique("$" + camelCase(name))
+	return unique(camelCase(name))
+
+}
+
+func dedup[T string | int](sliceList []T) []T {
+	allKeys := make(map[T]bool)
+	list := []T{}
+	for _, item := range sliceList {
+		if _, value := allKeys[item]; !value {
+			allKeys[item] = true
+			list = append(list, item)
+		}
+	}
+	return list
 }

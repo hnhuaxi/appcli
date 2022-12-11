@@ -21,9 +21,13 @@ commands:
       - name: "flag"
         type: "Bool"
         value: true
-    action: print(flag)
-action: 'printf("hello %s\n", app.Version)'
-globalbefore: 'global("app", new(App, {"version": $version}))'
+    action: printf("%v, %v", ctx.flag, ctx.hadoop)
+action: |
+  printf("hello %s", app.Version)
+globalbefore: |
+  app = make(App)
+  app.Version = version
+  global("app", app)
 license:
   header: This file bleongs to clig
   copyright: Copyright © 2019 clig

@@ -4,7 +4,7 @@ import (
 	"reflect"
 
 	"github.com/antonmedv/expr"
-	"github.com/antonmedv/expr/vm"
+	"github.com/hnhuaxi/appcli/program"
 	"github.com/urfave/cli/v2"
 )
 
@@ -13,32 +13,65 @@ type Action string
 type ActionFunc = func(*cli.Context) error
 
 type (
-	Program = vm.Program
-	Env     = expr.Option
+	// Program = vm.Program
+	Env = expr.Option
 )
 
 var (
-	compileCaches = make(map[string]*Program)
+	compileCaches = make(map[string]program.Program)
 )
 
-func buildAction(exp string, inenv interface{}) (prog *Program, err error) {
+func buildAction(exp string, inenv interface{}) (prog program.Program, err error) {
 	var ok bool
 	defer func() {
 		compileCaches[exp] = prog
 	}()
 
 	if prog, ok = compileCaches[exp]; !ok {
-		prog, err = expr.Compile(exp, expr.Env(inenv))
+		prog, err = CompileProgram(exp, inenv)
 	}
 	return
 }
 
-func buildCtxEnv(ctx *cli.Context) Map {
-	var env = make(Map)
+func allFlagNames(ctx *cli.Context) []string {
+	var names []string
+	for _, c := range ctx.Lineage() {
+		if c.Command == nil {
+			continue
+		}
 
-	var names = ctx.FlagNames()
+		for _, f := range c.Command.Flags {
+			names = append(names, f.Names()...)
+		}
+	}
+
+	if ctx.App != nil {
+		for _, f := range ctx.App.Flags {
+			names = append(names, f.Names()...)
+		}
+	}
+
+	return dedup(names)
+}
+
+func buildCtxEnv(ctx *cli.Context) Map {
+	var (
+		env   = make(Map)
+		ctxM  = make(Map)
+		names = allFlagNames(ctx)
+	)
+
+	env["ctx"] = ctxM
 	for _, name := range names {
-		env[name] = ctx.Value(name)
+		val := ctx.Value(name)
+		switch x := val.(type) {
+		case cli.Timestamp:
+			ctxM[name] = x.Value()
+		case cli.StringSlice:
+			ctxM[name] = x.Value()
+		default:
+			ctxM[name] = ctx.Value(name)
+		}
 	}
 
 	return env
@@ -71,6 +104,6 @@ func getFieldString(val interface{}, field string) string {
 	return fe.String()
 }
 
-func (act Action) Compile(env interface{}) (*Program, error) {
+func (act Action) Compile(env interface{}) (program.Program, error) {
 	return buildAction(string(act), env)
 }

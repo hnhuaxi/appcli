@@ -106,7 +106,8 @@ func unmarshalFlag(typ string, value *yaml.Node) (cli.Flag, error) {
 	case "string":
 		return decode[*cli.StringFlag](value)
 	case "stringslice":
-		return decode[*cli.StringSliceFlag](value)
+		return decodeSlice[*cli.StringSliceFlag, *cli.StringSlice](value)
+		// return decode[*cli.StringSliceFlag](value)
 	case "timestamp":
 		return decode[*cli.TimestampFlag](value)
 	case "uint":
@@ -130,4 +131,52 @@ func decode[T cli.Flag](value *yaml.Node) (flag T, err error) {
 	}
 
 	return v.Interface().(T), nil
+}
+
+func decodeSlice[T cli.Flag, V any](value *yaml.Node) (flag T, err error) {
+	var (
+		z  T
+		sv V
+
+		t = reflect.TypeOf(z)
+		v = reflect.New(t.Elem())
+	)
+
+	// value.
+
+	switch any(sv).(type) {
+	case *cli.StringSlice:
+		sliceValue, hasVal := extractSliceValue[string](value, "value")
+		if hasVal {
+			v.Elem().FieldByName("Value").Set(reflect.ValueOf(cli.NewStringSlice(sliceValue...)))
+		}
+	}
+
+	if err = value.Decode(v.Interface()); err != nil {
+		return z, err
+	}
+
+	return v.Interface().(T), nil
+}
+
+func extractSliceValue[S any](node *yaml.Node, name string) (value []S, ok bool) {
+	var contents []*yaml.Node
+	value = make([]S, 0)
+
+	for i := 0; i < len(node.Content); i += 2 {
+		var (
+			k, v = node.Content[i], node.Content[i+1]
+		)
+
+		if k.Value == name {
+			if err := v.Decode(&value); err == nil {
+				ok = true
+			}
+		} else {
+			contents = append(contents, k, v)
+		}
+	}
+
+	node.Content = contents
+	return
 }

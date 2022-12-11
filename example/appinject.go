@@ -4,36 +4,38 @@ package main
 
 import (
     "github.com/hnhuaxi/appcli"
+"github.com/hnhuaxi/appcli/env"
 )
 
 var Injects = map[string]interface{} {
-	// "$actionFunc": appcli.ActionFunc,
-	"$funcs": appcli.BuiltinObjects,
-	"$injects": appcli.Injects,
-	"$loadPackages": appcli.LoadPackages,
-	"$newObject": appcli.NewObject,
-	"$newPlainEncoder": appcli.NewPlainEncoder,
-	"$quote": appcli.Quote,
-	"$registerCreate": appcli.RegisterCreate,
-	"$version": appcli.Version,
-	"App": "$$ClassApp",
-	"Command": "$$ClassCommand",
-	"Flag": "$$ClassFlag",
-	"Inject": "$$ClassInject",
-	"InjectContext": "$$ClassInjectContext",
-	"Match": "$$ClassMatch",
-	"Output": "$$ClassOutput",
-	"Program": "$$ClassProgram", 
+	// "map": appcli.Map,
+	"version": appcli.Version, 
 }
 
+var InjectFuncs = map[string]interface{} {
+	// "actionFunc": appcli.ActionFunc,
+	"compileProgram": appcli.CompileProgram,
+	"loadPackages": appcli.LoadPackages,
+	"newObject": appcli.NewObject,
+	"newPlainEncoder": appcli.NewPlainEncoder,
+	"quote": appcli.Quote,
+	"registerCreate": appcli.RegisterCreate, 
+}
+
+var InjectTypes = map[string]interface{} {
+	"App": appcli.App{},
+	"Command": appcli.Command{},
+	"Flag": appcli.Flag{},
+	"Inject": appcli.Inject{},
+	"InjectContext": appcli.InjectContext{},
+	"Match": appcli.Match{},
+	"Output": appcli.Output{}, 
+}
+
+
 func init() {
-    appcli.Injects(Injects)
-	appcli.RegisterCreate("$$ClassApp", appcli.App{})
-	appcli.RegisterCreate("$$ClassCommand", appcli.Command{})
-	appcli.RegisterCreate("$$ClassFlag", appcli.Flag{})
-	appcli.RegisterCreate("$$ClassInject", appcli.Inject{})
-	appcli.RegisterCreate("$$ClassInjectContext", appcli.InjectContext{})
-	appcli.RegisterCreate("$$ClassMatch", appcli.Match{})
-	appcli.RegisterCreate("$$ClassOutput", appcli.Output{})
-	appcli.RegisterCreate("$$ClassProgram", appcli.Program{})
+    env.Injects(Injects)
+env.InjectTypes(InjectTypes)
+env.InjectFuncs(InjectFuncs)
+
 }

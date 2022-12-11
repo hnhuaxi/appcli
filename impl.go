@@ -1,10 +1,10 @@
 package appcli
 
 import (
+	"fmt"
 	"log"
 	"time"
 
-	"github.com/antonmedv/expr"
 	"github.com/imdario/mergo"
 	"github.com/jinzhu/copier"
 	"github.com/urfave/cli/v2"
@@ -50,37 +50,13 @@ type appImpl struct {
 	GlobalBefore Action
 	After        Action
 	GlobalAfter  Action
-	// An action to execute when the shell completion flag is set
-	// BashComplete BashCompleteFunc
-	// // An action to execute before any subcommands are run, but after the context is ready
-	// // If a non-nil error is returned, no subcommands are run
-	// Before BeforeFunc
-	// // An action to execute after any subcommands are run, but after the subcommand has finished
-	// // It is run even if Action() panics
-	// After AfterFunc
-	// // The action to execute when no subcommands are specified
-	// Action ActionFunc
-	// // Execute this function if the proper command cannot be found
-	// CommandNotFound CommandNotFoundFunc
-	// // Execute this function if a usage error occurs
-	// OnUsageError OnUsageErrorFunc
-	// // Execute this function when an invalid flag is accessed from the context
-	// InvalidFlagAccessHandler InvalidFlagAccessFunc
-	// Compilation date
+
 	Compiled time.Time
 	// List of all authors who contributed
 	Authors []*cli.Author
 	// Copyright of the binary if any
 	Copyright string
-	// Reader reader to write input to (useful for tests)
-	// ExitErrHandler processes any error encountered while running an App before
-	// it is returned to the caller. If no function is provided, HandleExitCoder
-	// is used as the default behavior.
-	// Other custom info
-	// Carries a function which returns app specific info.
-	// CustomAppHelpTemplate the text template for app help topic.
-	// cli.go uses text/template to render templates. You can
-	// render custom help text by setting this variable.
+
 	CustomAppHelpTemplate string
 	// Boolean to enable short-option handling so user can combine several
 	// single-character bool arguments into one
@@ -94,6 +70,14 @@ type appImpl struct {
 	Output Output `default:"json"`
 
 	Geninject string `default:"appinject.go"`
+
+	globalFlags map[node][]*Flag
+
+	nodeTree map[node]node
+}
+
+type node interface {
+	// String() string
 }
 
 type Command struct {
@@ -144,10 +128,16 @@ type Command struct {
 	CustomHelpTemplate string
 }
 
+func (cmd *Command) String() string {
+	return fmt.Sprintf("Command %s", cmd.Name)
+}
+
 type Map = map[string]interface{}
 
 func (app *appImpl) Run(args []string) error {
 	var cliApp = cli.App{}
+	app.globalFlags = make(map[node][]*Flag)
+	app.nodeTree = make(map[node]node)
 
 	if err := copier.Copy(&cliApp, app); err != nil {
 		return err
@@ -165,15 +155,14 @@ func (app *appImpl) Run(args []string) error {
 }
 
 func (app *appImpl) traverseBuildActions(cliapp *cli.App) error {
-
 	var (
 		buildAction   = app.makeSetupAction()
 		compileAction = app.makeCompileAction()
 	)
 
-	cliapp.Action = buildAction(app.Action, buildFlagEnv(app.Flags), true)
-	cliapp.Before = compileAction(app.Before, buildFlagEnv(app.Flags), false)
-	cliapp.After = compileAction(app.After, buildFlagEnv(app.Flags), false)
+	cliapp.Action = buildAction(app.Action, app.buildFlagEnv(app.Flags, app), true)
+	cliapp.Before = compileAction(app.Before, app.buildFlagEnv(app.Flags, app), false)
+	cliapp.After = compileAction(app.After, app.buildFlagEnv(app.Flags, app), false)
 
 	for i, cmd := range app.Commands {
 		if err := app.traverseBuildCmdActions(cliapp.Commands[i], cmd); err != nil {
@@ -194,23 +183,23 @@ func (app *appImpl) makeSetupAction() func(action Action, env Map, out bool) Act
 
 			var result any = nil
 			if app.GlobalBefore != "" {
-				beforeProg, err := app.GlobalBefore.Compile(app.mergeAll(env))
+				beforeProg, err := app.GlobalBefore.Compile(env)
 				if err != nil {
 					return err
 				}
 
-				result, err = expr.Run(beforeProg, app.mergeAll(buildCtxEnv(ctx)))
+				result, err = beforeProg.Run(buildCtxEnv(ctx))
 				if err != nil {
 					return err
 				}
 			}
-
-			prog, err := action.Compile(app.mergeAll(env))
+			_ = result
+			prog, err := action.Compile(env)
 			if err != nil {
 				return err
 			}
 
-			output, err := expr.Run(prog, app.mergeAll(buildCtxEnv(ctx), resultCtx(result)))
+			output, err := prog.Run(buildCtxEnv(ctx))
 			if err != nil {
 				return err
 			}
@@ -232,13 +221,13 @@ func (app *appImpl) makeCompileAction() func(action Action, env Map, out bool) A
 			return nil
 		}
 
-		prog, err := action.Compile(app.mergeAll(env))
+		prog, err := action.Compile(env)
 		if err != nil {
 			log.Fatalf("compile program error %s", err)
 		}
 
 		return func(ctx *cli.Context) error {
-			output, err := expr.Run(prog, app.mergeAll(buildCtxEnv(ctx)))
+			output, err := prog.Run(buildCtxEnv(ctx))
 			if err != nil {
 				return err
 			}
@@ -262,9 +251,9 @@ func (app *appImpl) traverseBuildCmdActions(dst *cli.Command, src *Command) erro
 		compileAction = app.makeCompileAction()
 	)
 
-	dst.Before = compileAction(src.Before, buildFlagEnv(src.Flags), false)
-	dst.Action = buildAction(src.Action, buildFlagEnv(src.Flags), true)
-	dst.After = compileAction(src.After, buildFlagEnv(src.Flags), false)
+	dst.Before = compileAction(src.Before, app.buildFlagEnv(src.Flags, src), false)
+	dst.Action = buildAction(src.Action, app.buildFlagEnv(src.Flags, src), true)
+	dst.After = compileAction(src.After, app.buildFlagEnv(src.Flags, src), false)
 	return nil
 }
 
@@ -273,42 +262,54 @@ func (app *appImpl) traverseFlagsCopy(dst *cli.App, src *appImpl) error {
 		dst.Flags[i] = flag.Flag
 	}
 
+	app.globalFlags[app] = src.Flags
 	for i, cmd := range src.Commands {
 		_ = app.traverseCmd(dst.Commands[i], cmd)
+		app.nodeTree[cmd] = app
 	}
 
 	return nil
 }
 
 func (app *appImpl) traverseCmd(dst *cli.Command, src *Command) error {
-	_ = app.traverseFlags(dst, src.Flags)
+	_ = app.traverseFlags(dst, src)
 
 	for i, subcmd := range src.Subcommands {
 		_ = app.traverseCmd(dst.Subcommands[i], subcmd)
+		app.nodeTree[subcmd] = src
+
 	}
 	return nil
 }
 
-func (app *appImpl) traverseFlags(dst *cli.Command, flags []*Flag) error {
-	for i, flag := range flags {
+func (app *appImpl) traverseFlags(dst *cli.Command, src *Command) error {
+	for i, flag := range src.Flags {
 		dst.Flags[i] = flag.Flag
 	}
+
+	app.globalFlags[src] = src.Flags
 	return nil
 }
 
-func (app *appImpl) mergeAll(envs ...Map) Map {
-	envs = append([]Map{BuiltinObjects, _InjectObjects, _GlobalObjects}, envs...)
-	return merge(envs...)
+func (app *appImpl) buildFlagEnv(flags []*Flag, curr node) Map {
+	var (
+		env   = make(Map)
+		nodes []node
+	)
+
+	//  buildFlagEnv(flags)
+	for parent := app.nodeTree[curr]; parent != nil; parent = app.nodeTree[parent] {
+		nodes = append([]node{parent}, nodes...)
+	}
+
+	for _, node := range nodes {
+		_ = mergo.MapWithOverwrite(&env, buildFlagEnv(app.globalFlags[node]))
+	}
+
+	_ = mergo.MapWithOverwrite(&env, buildFlagEnv(flags))
+	return env
 }
 
-func merge(envs ...Map) Map {
-	if len(envs) < 1 {
-		return envs[0]
-	}
-
-	var dst = make(Map)
-	for _, env := range envs {
-		_ = mergo.MapWithOverwrite(&dst, env)
-	}
-	return dst
+func (app *appImpl) String() string {
+	return fmt.Sprintf("App %s", app.Name)
 }
