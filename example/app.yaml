@@ -21,6 +21,7 @@ commands:
       - name: "flag"
         type: "Bool"
         value: true
+    aliases: ["d"]
     action: printf("%v, %v", ctx.flag, ctx.hadoop)
 action: |
   printf("hello %s", app.Version)

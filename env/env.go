@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/gotidy/ptr"
 	"github.com/hnhuaxi/utils/convert"
 	"github.com/imdario/mergo"
 	"github.com/kr/pretty"
@@ -23,6 +24,7 @@ var (
 var BuiltinFuncs = Map{
 	"print":         fmt.Print,
 	"printf":        fmt.Printf,
+	"println":       fmt.Println,
 	"pprint":        pretty.Print,
 	"pprintf":       pretty.Printf,
 	"global":        RegisterGlobal,
@@ -33,6 +35,24 @@ var BuiltinFuncs = Map{
 	"createContext": context.Background,
 	"withValue":     context.WithValue,
 	"withCancel":    context.WithCancel,
+	"rel":           Rel,
+	"pstr":          ptr.String,
+	"pint":          ptr.Int,
+	"pint8":         ptr.Int8,
+	"pint16":        ptr.Int16,
+	"pint32":        ptr.Int32,
+	"pint64":        ptr.Int64,
+	"puint":         ptr.UInt,
+	"puint8":        ptr.UInt8,
+	"puint16":       ptr.UInt16,
+	"puint32":       ptr.UInt32,
+	"puint64":       ptr.UInt64,
+	"pbool":         ptr.Bool,
+	"pfloat32":      ptr.Float32,
+	"pfloat64":      ptr.Float64,
+	"pcomplex64":    ptr.Complex64,
+	"pcomplex128":   ptr.Complex128,
+	"pbyte":         ptr.Byte,
 }
 
 func Injects(objects Map) {
@@ -94,4 +114,10 @@ func Timestamp() int64 {
 
 func TimestampMs() int64 {
 	return time.Now().UnixMilli()
+}
+
+func Rel(v interface{}) interface{} {
+	var vv = reflect.ValueOf(v)
+	vv = reflect.Indirect(vv)
+	return vv.Interface()
 }

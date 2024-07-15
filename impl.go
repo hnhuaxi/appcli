@@ -201,6 +201,7 @@ func (app *appImpl) makeSetupAction() func(action Action, env Map, out bool) Act
 
 			output, err := prog.Run(buildCtxEnv(ctx))
 			if err != nil {
+				log.Printf("run action error %s", err)
 				return err
 			}
 			if out {
